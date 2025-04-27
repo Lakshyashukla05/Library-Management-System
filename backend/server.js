@@ -1,69 +1,84 @@
-
-
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const morgan = require('morgan');
+const dotenv = require('dotenv');
+const path = require('path');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const User = require('./models/User');
-const { JWT_SECRET } = process.env; 
 
+// Load environment variables
+dotenv.config();
 
-exports.registerUser = async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
+// Import routes
+const authRoutes = require('./routes/auth');
+const bookRoutes = require('./routes/books');
+const userRoutes = require('./routes/users');
+const membershipRoutes = require('./routes/memberships');
+const transactionRoutes = require('./routes/transactions');
 
+// Initialize express app
+const app = express();
+const PORT = 5000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(morgan('dev'));
+
+// Connect to MongoDB and ensure admin user exists
+mongoose.connect(process.env.MONGODB_URI)
+  .then(async () => {
+    console.log('MongoDB connected');
     
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return res.status(400).json({ message: 'Email already registered.' });
+    // Check if admin user exists
+    try {
+      const adminCount = await User.countDocuments({ role: 'admin' });
+      
+      if (adminCount === 0) {
+        console.log('No admin user found. Creating default admin user...');
+        
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash('admin123', salt);
+        
+        await User.create({
+          username: 'admin',
+          password: hashedPassword,
+          name: 'Administrator',
+          email: 'admin@library.com',
+          role: 'admin',
+          active: true
+        });
+        
+        console.log('Default admin user created:');
+        console.log('Username: admin');
+        console.log('Password: admin123');
+      } else {
+        console.log('Admin user(s) already exist');
+      }
+    } catch (error) {
+      console.error('Error checking/creating admin user:', error);
     }
+  })
+  .catch(err => console.error('MongoDB connection error:', err));
 
-    
-    const hashedPassword = await bcrypt.hash(password, 10);
+// Route middleware
+app.use('/api/auth', authRoutes);
+app.use('/api/books', bookRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/memberships', membershipRoutes);
+app.use('/api/transactions', transactionRoutes);
 
-    
-    const newUser = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role: 'user', 
-    });
-
+// Serve static assets in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../frontend/build')));
   
-    const token = jwt.sign({ id: newUser.id, role: newUser.role }, JWT_SECRET, {
-      expiresIn: '1h',
-    });
+  app.get('*', (req, res) => {
+    res.sendFile(path.resolve(__dirname, '../frontend', 'build', 'index.html'));
+  });
+}
 
-    return res.status(201).json({ message: 'User registered successfully', token });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
-  }
-};
-
-
-exports.loginUser = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    
-    const user = await User.findOne({ where: { email } });
-    if (!user) {
-      return res.status(400).json({ message: 'User not found' });
-    }
-
-    
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
-
-    
-    const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, {
-      expiresIn: '1h',
-    });
-
-    return res.status(200).json({ message: 'Login successful', token });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Internal server error' });
-  }
-};
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+}); 
